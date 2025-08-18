@@ -79,11 +79,10 @@ def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray, transp
     output_bytes.seek(0)
     return output_bytes
 
-
 async def process_remove_background(file, transparent: bool, background_tasks: BackgroundTasks):
     """Handles FastAPI UploadFile -> runs background removal fully in memory -> returns StreamingResponse"""
     content = await file.read()
-
+    filename_base = os.path.splitext(file.filename)[0]
     output_bytes = None
     used_rembg = False
 
@@ -100,8 +99,11 @@ async def process_remove_background(file, transparent: bool, background_tasks: B
         alpha = (prob * 255).astype(np.uint8)
         output_bytes = _composite_on_white(content, alpha, transparent=transparent)
 
+    ext = "png" if transparent else "jpg"
+    output_filename = f"{filename_base}.{ext}"
+
     return StreamingResponse(
         output_bytes,
         media_type="image/png" if transparent else "image/jpeg",
-        headers={"Content-Disposition": f"inline; filename=result.{ 'png' if transparent else 'jpg'}"}
+        headers={"Content-Disposition": f"inline; filename={output_filename}"}
     )
