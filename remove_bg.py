@@ -4,9 +4,10 @@ from PIL import Image
 import torchvision.transforms as transforms
 import cv2
 import os
-from fastapi.responses import StreamingResponse
-from fastapi import BackgroundTasks
 from io import BytesIO
+from fastapi import FastAPI, UploadFile, BackgroundTasks
+from fastapi.responses import StreamingResponse, HTMLResponse
+from tempfile import NamedTemporaryFile
 
 try:
     from rembg import remove as rembg_remove
@@ -15,6 +16,10 @@ except Exception:
     REMBG_AVAILABLE = False
 
 from u2Net.model.u2net import U2NET
+
+app = FastAPI()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _safe_normalize(arr: np.ndarray) -> np.ndarray:
@@ -77,30 +82,41 @@ def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray) -> Byt
     return output_bytes
 
 
-async def process_remove_background(file, _: bool, background_tasks: BackgroundTasks):
+async def process_remove_background(file: UploadFile, _: bool, background_tasks: BackgroundTasks):
     """Process FastAPI UploadFile -> return JPEG with white background only"""
     content = await file.read()
     filename_base = os.path.splitext(file.filename)[0]
     output_bytes = None
     used_rembg = False
 
-    if REMBG_AVAILABLE:
-        rgba = rembg_remove(content)
-        cut = Image.open(BytesIO(rgba)).convert('RGBA')
-        alpha = np.array(cut.split()[-1])
-        if alpha.max() > 0:
+    # Temporary file for safety in production
+    with NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        if REMBG_AVAILABLE:
+            rgba = rembg_remove(content)
+            cut = Image.open(BytesIO(rgba)).convert('RGBA')
+            alpha = np.array(cut.split()[-1])
+            if alpha.max() > 0:
+                output_bytes = _composite_on_white(content, alpha)
+                used_rembg = True
+
+        if not used_rembg:
+            model_path = os.path.join(BASE_DIR, "saved_models/u2net/u2net_human_seg.pth")
+            prob, _ = _u2net_prob_mask(content, model_path)
+            alpha = (prob * 255).astype(np.uint8)
             output_bytes = _composite_on_white(content, alpha)
-            used_rembg = True
 
-    if not used_rembg:
-        prob, _ = _u2net_prob_mask(content, "saved_models/u2net/u2net_human_seg.pth")
-        alpha = (prob * 255).astype(np.uint8)
-        output_bytes = _composite_on_white(content, alpha)
+        output_filename = f"{filename_base}.jpg"
+        return StreamingResponse(
+            output_bytes,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": f"inline; filename={output_filename}"}
+        )
+    finally:
+        # Ensure temporary file is cleaned up
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
-    output_filename = f"{filename_base}.jpg"
-
-    return StreamingResponse(
-        output_bytes,
-        media_type="image/jpeg",
-        headers={"Content-Disposition": f"inline; filename={output_filename}"}
-    )

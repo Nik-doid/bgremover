@@ -6,6 +6,7 @@ import uvicorn
 app = FastAPI()
 
 
+
 @app.get("/", response_class=HTMLResponse)
 async def form_page():
     return """
@@ -16,7 +17,6 @@ async def form_page():
             <form action="/remove-bg" method="post" enctype="multipart/form-data">
                 <label>Select Image:</label>
                 <input type="file" name="file" accept="image/*" required><br><br>
-
                 <button type="submit">Upload & Process</button>
             </form>
         </body>
@@ -25,18 +25,16 @@ async def form_page():
 
 
 @app.post("/remove-bg")
-async def remove_bg(
-    file: UploadFile,
-    background_tasks: BackgroundTasks
-):
+async def remove_bg(file: UploadFile, background_tasks: BackgroundTasks):
     return await process_remove_background(file, False, background_tasks)
 
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(
-        "main:app",          
-        host="0.0.0.0",      
-        port=8000,           
-        workers=4,          
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        workers=1,   # Start with 1 worker for file uploads
         log_level="info"
     )
