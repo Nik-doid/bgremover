@@ -1,0 +1,4 @@
+/venv
+/saved_models
+u2Net/__pycache__
+u2Net/model/__pycache__
