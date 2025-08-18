@@ -53,8 +53,8 @@ def _u2net_prob_mask(image_bytes: bytes, model_path: str) -> tuple[np.ndarray, t
     return prob, (W, H)
 
 
-def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray, transparent: bool = False) -> BytesIO:
-    """Composite subject onto white or transparent background and return BytesIO."""
+def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray) -> BytesIO:
+    """Composite subject onto white background only and return BytesIO."""
     original = Image.open(BytesIO(image_bytes)).convert('RGBA')
 
     if (original.size[0], original.size[1]) != (alpha_mask_uint8.shape[1], alpha_mask_uint8.shape[0]):
@@ -66,22 +66,19 @@ def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray, transp
     subject = original.copy()
     subject.putalpha(alpha)
 
+    arr = np.array(subject)
+    alpha_f = arr[..., 3:4] / 255.0
+    arr[..., :3] = (arr[..., :3] * alpha_f + 255 * (1 - alpha_f)).astype(np.uint8)
+    result = Image.fromarray(arr[..., :3], 'RGB')
+
     output_bytes = BytesIO()
-
-    if transparent:
-        subject.save(output_bytes, format="PNG")
-    else:
-        arr = np.array(subject)
-        alpha_f = arr[..., 3:4] / 255.0
-        arr[..., :3] = (arr[..., :3] * alpha_f + 255 * (1 - alpha_f)).astype(np.uint8)
-        result = Image.fromarray(arr[..., :3], 'RGB')
-        result.save(output_bytes, format="JPEG", quality=95)
-
+    result.save(output_bytes, format="JPEG", quality=95)
     output_bytes.seek(0)
     return output_bytes
 
-async def process_remove_background(file, transparent: bool, background_tasks: BackgroundTasks):
-    """Handles FastAPI UploadFile -> runs background removal fully in memory -> returns StreamingResponse"""
+
+async def process_remove_background(file, _: bool, background_tasks: BackgroundTasks):
+    """Process FastAPI UploadFile -> return JPEG with white background only"""
     content = await file.read()
     filename_base = os.path.splitext(file.filename)[0]
     output_bytes = None
@@ -92,19 +89,18 @@ async def process_remove_background(file, transparent: bool, background_tasks: B
         cut = Image.open(BytesIO(rgba)).convert('RGBA')
         alpha = np.array(cut.split()[-1])
         if alpha.max() > 0:
-            output_bytes = _composite_on_white(content, alpha, transparent=transparent)
+            output_bytes = _composite_on_white(content, alpha)
             used_rembg = True
 
     if not used_rembg:
         prob, _ = _u2net_prob_mask(content, "saved_models/u2net/u2net_human_seg.pth")
         alpha = (prob * 255).astype(np.uint8)
-        output_bytes = _composite_on_white(content, alpha, transparent=transparent)
+        output_bytes = _composite_on_white(content, alpha)
 
-    ext = "png" if transparent else "jpg"
-    output_filename = f"{filename_base}.{ext}"
+    output_filename = f"{filename_base}.jpg"
 
     return StreamingResponse(
         output_bytes,
-        media_type="image/png" if transparent else "image/jpeg",
+        media_type="image/jpeg",
         headers={"Content-Disposition": f"inline; filename={output_filename}"}
     )

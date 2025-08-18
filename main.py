@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, Form, BackgroundTasks
+from fastapi import FastAPI, UploadFile, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from remove_bg import process_remove_background
+import uvicorn
 
 app = FastAPI()
 
@@ -16,9 +17,6 @@ async def form_page():
                 <label>Select Image:</label>
                 <input type="file" name="file" accept="image/*" required><br><br>
 
-                <label>Transparent Background?</label>
-                <input type="checkbox" name="transparent"><br><br>
-
                 <button type="submit">Upload & Process</button>
             </form>
         </body>
@@ -29,8 +27,16 @@ async def form_page():
 @app.post("/remove-bg")
 async def remove_bg(
     file: UploadFile,
-    background_tasks: BackgroundTasks,
-    transparent: str = Form(None) 
+    background_tasks: BackgroundTasks
 ):
-    transparent_flag = transparent is not None
-    return await process_remove_background(file, transparent_flag, background_tasks)
+    return await process_remove_background(file, False, background_tasks)
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",          
+        host="0.0.0.0",      
+        port=8000,           
+        workers=4,          
+        log_level="info"
+    )
