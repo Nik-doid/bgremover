@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Background Remover</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+      }
+      .container {
+        max-width: 400px;
+        margin: auto;
+        text-align: center;
+      }
+      input[type="file"],
+      button {
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Upload Image to Remove Background</h2>
+      <form
+        action="/remove-background/"
+        method="post"
+        enctype="multipart/form-data"
+      >
+        <input type="file" name="file" accept="image/*" required /><br />
+        <label>
+          <input type="checkbox" name="transparent" value="true" /> Transparent
+          Background </label
+        ><br />
+        <button type="submit">Upload & Process</button>
+      </form>
+    </div>
+  </body>
+</html>

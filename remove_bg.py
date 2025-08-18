@@ -1,9 +1,11 @@
-import os
 import torch
 import numpy as np
 from PIL import Image
 import torchvision.transforms as transforms
 import cv2
+from fastapi.responses import StreamingResponse
+from fastapi import BackgroundTasks
+from io import BytesIO
 
 try:
     from rembg import remove as rembg_remove
@@ -29,8 +31,8 @@ def _pil_to_tensor(pil_img: Image.Image, size=(320, 320)) -> torch.Tensor:
     return tfm(pil_img).unsqueeze(0)
 
 
-def _u2net_prob_mask(image_path: str, model_path: str) -> tuple[np.ndarray, tuple]:
-    pil = Image.open(image_path).convert('RGB')
+def _u2net_prob_mask(image_bytes: bytes, model_path: str) -> tuple[np.ndarray, tuple]:
+    pil = Image.open(BytesIO(image_bytes)).convert('RGB')
     W, H = pil.size
     inp = _pil_to_tensor(pil)
     device = torch.device('cpu')
@@ -50,11 +52,9 @@ def _u2net_prob_mask(image_path: str, model_path: str) -> tuple[np.ndarray, tupl
     return prob, (W, H)
 
 
-def _composite_on_white(image_path: str, alpha_mask_uint8: np.ndarray, out_path: str, transparent: bool = False):
-    """
-    Composite subject onto white (halo-free) or output transparent background.
-    """
-    original = Image.open(image_path).convert('RGBA')
+def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray, transparent: bool = False) -> BytesIO:
+    """Composite subject onto white or transparent background and return BytesIO."""
+    original = Image.open(BytesIO(image_bytes)).convert('RGBA')
 
     if (original.size[0], original.size[1]) != (alpha_mask_uint8.shape[1], alpha_mask_uint8.shape[0]):
         alpha_mask_uint8 = cv2.resize(alpha_mask_uint8, (original.size[0], original.size[1]), interpolation=cv2.INTER_LINEAR)
@@ -65,52 +65,43 @@ def _composite_on_white(image_path: str, alpha_mask_uint8: np.ndarray, out_path:
     subject = original.copy()
     subject.putalpha(alpha)
 
+    output_bytes = BytesIO()
+
     if transparent:
-        subject.save(out_path, format="PNG")
+        subject.save(output_bytes, format="PNG")
     else:
         arr = np.array(subject)
         alpha_f = arr[..., 3:4] / 255.0
         arr[..., :3] = (arr[..., :3] * alpha_f + 255 * (1 - alpha_f)).astype(np.uint8)
         result = Image.fromarray(arr[..., :3], 'RGB')
-        result.save(out_path, quality=95)
+        result.save(output_bytes, format="JPEG", quality=95)
+
+    output_bytes.seek(0)
+    return output_bytes
 
 
-def remove_background_strict(
-    image_path: str,
-    output_path: str,
-    model_path: str = 'saved_models/u2net/u2net_human_seg.pth',
-    use_rembg_first: bool = True,
-    transparent: bool = False
-):
-    """Removes background and saves output with halo-free edges."""
+async def process_remove_background(file, transparent: bool, background_tasks: BackgroundTasks):
+    """Handles FastAPI UploadFile -> runs background removal fully in memory -> returns StreamingResponse"""
+    content = await file.read()
+
+    output_bytes = None
     used_rembg = False
 
-    if use_rembg_first and REMBG_AVAILABLE:
-        with open(image_path, 'rb') as f:
-            rgba = rembg_remove(f.read())
-        from io import BytesIO
+    if REMBG_AVAILABLE:
+        rgba = rembg_remove(content)
         cut = Image.open(BytesIO(rgba)).convert('RGBA')
         alpha = np.array(cut.split()[-1])
-        if alpha.max() > 0:  
-            _composite_on_white(image_path, alpha, output_path, transparent=transparent)
+        if alpha.max() > 0:
+            output_bytes = _composite_on_white(content, alpha, transparent=transparent)
             used_rembg = True
 
     if not used_rembg:
-        prob, _ = _u2net_prob_mask(image_path, model_path)
+        prob, _ = _u2net_prob_mask(content, "saved_models/u2net/u2net_human_seg.pth")
         alpha = (prob * 255).astype(np.uint8)
-        _composite_on_white(image_path, alpha, output_path, transparent=transparent)
+        output_bytes = _composite_on_white(content, alpha, transparent=transparent)
 
-    print(f"Saved output to {output_path}")
-
-
-if __name__ == "__main__":
-    input_image = "a.jpg" 
-    output_image = "output.jpg" 
-
-    remove_background_strict(
-        input_image,
-        output_image,
-        model_path='saved_models/u2net/u2net_human_seg.pth',
-        use_rembg_first=True,
-        transparent=False
+    return StreamingResponse(
+        output_bytes,
+        media_type="image/png" if transparent else "image/jpeg",
+        headers={"Content-Disposition": f"inline; filename=result.{ 'png' if transparent else 'jpg'}"}
     )
