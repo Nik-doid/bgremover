@@ -16,6 +16,43 @@ The API returns images with a **white background** (JPEG format).
 
 ---
 
+## Requirements
+
+-torch>=2.0.0
+-torchvision>=0.15.0
+-numpy>=1.24.0
+-Pillow>=9.5.0
+-opencv-python>=4.7.0
+-rembg>=2.0.50
+
+---
+
+## Installation
+
+1. Create and activate a virtual environment (recommended):
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+2. Install the required packages:
+
+```bash
+pip install -r requirements.txt
+
+```
+
+## How to use
+
+-Simply run the script
+
+```bash
+python3 main.py
+```
+---
+
+
 ## Citation
 
 ```
