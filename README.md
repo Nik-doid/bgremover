@@ -40,7 +40,7 @@ python-multipart>=0.0.6
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/Nik-doid/bgremover.git
+git clone https://github.com/Team-Exopy/bgremover.git
 cd bgremover
 ```
 
@@ -86,6 +86,7 @@ python3 main.py
 ```
 
 The API will be available at:
+
 - **Web Interface**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **Alternative Docs**: http://localhost:8000/redoc
@@ -132,17 +133,17 @@ else:
 
 ```javascript
 const formData = new FormData();
-formData.append('file', fileInput.files[0]);
+formData.append("file", fileInput.files[0]);
 
-fetch('http://localhost:8000/remove-bg', {
-    method: 'POST',
-    body: formData
+fetch("http://localhost:8000/remove-bg", {
+  method: "POST",
+  body: formData,
 })
-.then(response => response.blob())
-.then(blob => {
+  .then((response) => response.blob())
+  .then((blob) => {
     const url = URL.createObjectURL(blob);
     // Use the URL to display or download the image
-});
+  });
 ```
 
 ## 📁 Project Structure
@@ -154,9 +155,9 @@ background-remover-api/
 ├── README.md              # This file
 ├── saved_models/
 │   └── u2net/
-│       └── u2net-human-seg.pth  # U²-Net model file            
+│       └── u2net-human-seg.pth  # U²-Net model file
 ├── templates/             # HTML templates (if any)
-├── u2Net                   # u2net repo 
+├── u2Net                   # u2net repo
 ```
 
 ## ⚙️ Configuration
@@ -200,10 +201,12 @@ docker run -p 8000:8000 background-remover
 ### Common Issues
 
 1. **Model Not Found Error**
+
    - Ensure `u2net-human-seg.pth` is in `saved_models/u2net/` directory
    - Check file permissions
 
 2. **Memory Issues**
+
    - Reduce image size before processing
    - Increase system RAM or use GPU acceleration
 
