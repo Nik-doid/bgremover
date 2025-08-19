@@ -29,6 +29,8 @@ The API returns images with a **white background** (JPEG format).
 
 ## Installation
 
+--Note: Download u2net-human-seg.pth from u2net repo and save it in saved_models/u2net directory.
+
 1. Create and activate a virtual environment (recommended):
 
 ```bash
