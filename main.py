@@ -6,15 +6,17 @@ import numpy as np
 from PIL import Image
 import torchvision.transforms as transforms
 import cv2
-from fastapi import FastAPI, UploadFile, BackgroundTasks
+from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import StreamingResponse, HTMLResponse
 
+# Try loading rembg
 try:
     from rembg import remove as rembg_remove
     REMBG_AVAILABLE = True
 except Exception:
     REMBG_AVAILABLE = False
 
+# U2NET model import
 from u2Net.model.u2net import U2NET
 
 app = FastAPI()
@@ -22,10 +24,10 @@ app = FastAPI()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "saved_models/u2net/u2net_human_seg.pth")
 
-print("BASE_DIR:", BASE_DIR)
-print("Checking U2NET model exists at:", MODEL_PATH)
+# Load U2NET model
+print("Loading U2NET model from:", MODEL_PATH)
 if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"U2NET model file not found: {MODEL_PATH}")
+    raise FileNotFoundError(f"U2NET model not found at {MODEL_PATH}")
 
 device = torch.device("cpu")
 u2net_model = U2NET(3, 1)
@@ -34,6 +36,8 @@ u2net_model.load_state_dict(state)
 u2net_model.eval()
 print("U2NET model loaded successfully.")
 
+
+# --- Helpers ---
 def _safe_normalize(arr: np.ndarray) -> np.ndarray:
     mn, mx = float(arr.min()), float(arr.max())
     if mx - mn < 1e-8:
@@ -58,81 +62,119 @@ def _u2net_prob_mask(image_bytes: bytes) -> np.ndarray:
         prob = _safe_normalize(mask)
 
     prob = cv2.resize((prob * 255).astype(np.uint8), (W, H), interpolation=cv2.INTER_CUBIC)
-    prob = prob.astype(np.float32) / 255.0
-    return prob
+    return prob.astype(np.float32) / 255.0
 
-def _composite_on_white(image_bytes: bytes, alpha_mask_uint8: np.ndarray) -> BytesIO:
+def _composite_white(image_bytes: bytes, alpha_mask: np.ndarray) -> BytesIO:
     original = Image.open(BytesIO(image_bytes)).convert('RGBA')
-    if (original.size[0], original.size[1]) != (alpha_mask_uint8.shape[1], alpha_mask_uint8.shape[0]):
-        alpha_mask_uint8 = cv2.resize(alpha_mask_uint8, (original.size[0], original.size[1]), interpolation=cv2.INTER_LINEAR)
-    alpha_mask_uint8 = cv2.GaussianBlur(alpha_mask_uint8, (3, 3), 0)
-    alpha = Image.fromarray(alpha_mask_uint8).convert('L')
+
+    if (original.size[0], original.size[1]) != (alpha_mask.shape[1], alpha_mask.shape[0]):
+        alpha_mask = cv2.resize(alpha_mask, (original.size[0], original.size[1]), interpolation=cv2.INTER_LINEAR)
+
+    alpha_mask = cv2.GaussianBlur(alpha_mask, (3, 3), 0)
+    alpha = Image.fromarray(alpha_mask).convert('L')
+
     subject = original.copy()
     subject.putalpha(alpha)
 
     arr = np.array(subject)
     alpha_f = arr[..., 3:4] / 255.0
     arr[..., :3] = (arr[..., :3] * alpha_f + 255 * (1 - alpha_f)).astype(np.uint8)
-    result = Image.fromarray(arr[..., :3], 'RGB')
 
+    result = Image.fromarray(arr[..., :3], 'RGB')
+    output = BytesIO()
+    result.save(output, format='JPEG', quality=95)
+    output.seek(0)
+    return output
+
+def _make_qr_transparent(image_bytes: bytes, tolerance: int = 30) -> BytesIO:
+    """Improved QR transparency processing"""
+    image = Image.open(BytesIO(image_bytes)).convert("RGBA")
+    arr = np.array(image, dtype=np.uint8)
+    
+    # Extract channels
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    
+    # More reliable white detection - all channels must be above threshold
+    white_threshold = 255 - tolerance
+    is_white = (r >= white_threshold) & (g >= white_threshold) & (b >= white_threshold)
+    
+    # Set white pixels transparent
+    arr[is_white, 3] = 0
+    
+    # Ensure we're returning PNG
+    output_img = Image.fromarray(arr, mode="RGBA")
     output_bytes = BytesIO()
-    result.save(output_bytes, format="JPEG", quality=95)
+    output_img.save(output_bytes, format="PNG", optimize=True)
     output_bytes.seek(0)
     return output_bytes
 
 @app.get("/", response_class=HTMLResponse)
-async def form_page():
+async def upload_form():
     return """
     <html>
-        <head><title>Background Removal</title></head>
-        <body style="font-family: sans-serif;">
-            <h2>Upload an image to remove background</h2>
+        <head><title>Image Background Processor</title></head>
+        <body style="font-family: Arial; max-width: 500px; margin: auto;">
+            <h2>Remove Background</h2>
             <form action="/remove-bg" method="post" enctype="multipart/form-data">
-                <label>Select Image:</label>
+                <label>Select Image:</label><br>
                 <input type="file" name="file" accept="image/*" required><br><br>
-                <button type="submit">Upload & Process</button>
+
+                <label>Is QR Code?</label><br>
+                <select name="is_qr">
+                    <option value="false">No (Photo)</option>
+                    <option value="true">Yes (QR Code)</option>
+                </select><br><br>
+
+                <button type="submit">Process Image</button>
             </form>
         </body>
     </html>
     """
 
+
 @app.post("/remove-bg")
-async def remove_bg(file: UploadFile, background_tasks: BackgroundTasks):
+async def remove_bg(file: UploadFile, is_qr: str = Form(...)):
+    is_qr = is_qr.lower() == "true"
     content = await file.read()
     filename_base = os.path.splitext(file.filename)[0]
-    output_bytes = None
-    used_rembg = False
-
-    print("Received file:", file.filename, len(content), "bytes")
 
     try:
-        # --- Try RemBG first ---
-        if REMBG_AVAILABLE:
-            print("Using RemBG for background removal...")
-            rgba = rembg_remove(content)
-            cut = Image.open(BytesIO(rgba)).convert('RGBA')
-            alpha = np.array(cut.split()[-1])
-            if alpha.max() > 0:
-                output_bytes = _composite_on_white(content, alpha)
-                used_rembg = True
+        if is_qr:
+            print("Processing QR Code: making white background transparent...")
+            output_bytes = _make_qr_transparent(content, tolerance=30)
+            return StreamingResponse(
+                output_bytes,
+                media_type="image/png",
+                headers={"Content-Disposition": f"inline; filename={filename_base}_transparent.png"}
+            )
+        else:
+            print("Processing Photo: removing background...")
+            used_rembg = False
+            if REMBG_AVAILABLE:
+                print("Trying rembg first...")
+                rgba = rembg_remove(content)
+                cut = Image.open(BytesIO(rgba)).convert('RGBA')
+                alpha = np.array(cut.split()[-1])
+                if alpha.max() > 0:
+                    output_bytes = _composite_white(content, alpha)
+                    used_rembg = True
 
-        # --- Fallback to U2NET ---
-        if not used_rembg:
-            print("Using U2NET for background removal...")
-            prob = _u2net_prob_mask(content)
-            alpha = (prob * 255).astype(np.uint8)
-            output_bytes = _composite_on_white(content, alpha)
+            if not used_rembg:
+                print("Falling back to U2NET...")
+                prob = _u2net_prob_mask(content)
+                alpha = (prob * 255).astype(np.uint8)
+                output_bytes = _composite_white(content, alpha)
 
-        output_filename = f"{filename_base}.jpg"
-        print("Background removal successful:", output_filename)
-        return StreamingResponse(
-            output_bytes,
-            media_type="image/jpeg",
-            headers={"Content-Disposition": f"inline; filename={output_filename}"}
-        )
+            return StreamingResponse(
+                output_bytes,
+                media_type="image/jpeg",
+                headers={"Content-Disposition": f"inline; filename={filename_base}_nobg.jpg"}
+            )
+
     except Exception as e:
-        print("Error processing file:", e)
+        print("Error:", e)
         return {"error": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn
