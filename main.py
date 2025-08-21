@@ -87,21 +87,21 @@ def _composite_white(image_bytes: bytes, alpha_mask: np.ndarray) -> BytesIO:
     return output
 
 def _make_qr_transparent(image_bytes: bytes, tolerance: int = 30) -> BytesIO:
-    """Improved QR transparency processing"""
+    """Make black pixels transparent in a QR code"""
     image = Image.open(BytesIO(image_bytes)).convert("RGBA")
     arr = np.array(image, dtype=np.uint8)
     
     # Extract channels
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
     
-    # More reliable white detection - all channels must be above threshold
-    white_threshold = 255 - tolerance
-    is_white = (r >= white_threshold) & (g >= white_threshold) & (b >= white_threshold)
+    # Detect black pixels - all channels must be below threshold
+    black_threshold = tolerance
+    is_black = (r <= black_threshold) & (g <= black_threshold) & (b <= black_threshold)
     
-    # Set white pixels transparent
-    arr[is_white, 3] = 0
+    # Set black pixels transparent
+    arr[is_black, 3] = 0
     
-    # Ensure we're returning PNG
+    # Save back to PNG with transparency
     output_img = Image.fromarray(arr, mode="RGBA")
     output_bytes = BytesIO()
     output_img.save(output_bytes, format="PNG", optimize=True)
@@ -133,7 +133,7 @@ async def upload_form():
 
 
 @app.post("/remove-bg")
-async def remove_bg(file: UploadFile, is_qr: str = Form(...)):
+async def remove_bg(file: UploadFile, is_qr: str = Form(default="false")):
     is_qr = is_qr.lower() == "true"
     content = await file.read()
     filename_base = os.path.splitext(file.filename)[0]
